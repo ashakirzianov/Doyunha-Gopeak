@@ -6,7 +6,7 @@ const MCPToolExecutorScript = preload("tool_executor.gd")
 
 var _mcp_client: Node
 var _tool_executor: Node
-var _status_label: Label
+var _status_button: Button
 
 
 func _enter_tree() -> void:
@@ -43,30 +43,48 @@ func _exit_tree() -> void:
 		_tool_executor.queue_free()
 		_tool_executor = null
 
-	if _status_label:
-		remove_control_from_container(CONTAINER_TOOLBAR, _status_label)
-		_status_label.queue_free()
-		_status_label = null
+	if _status_button:
+		remove_control_from_container(CONTAINER_TOOLBAR, _status_button)
+		_status_button.queue_free()
+		_status_button = null
 
 
 func _setup_status_indicator() -> void:
-	_status_label = Label.new()
-	_status_label.text = "MCP: Connecting..."
-	_status_label.add_theme_color_override("font_color", Color.YELLOW)
-	_status_label.add_theme_font_size_override("font_size", 12)
-	add_control_to_container(CONTAINER_TOOLBAR, _status_label)
+	# A flat toolbar button that doubles as a status readout and a click-to-reconnect control —
+	# the addon doesn't auto-retry a failed initial connection, so this is the manual recovery.
+	_status_button = Button.new()
+	_status_button.flat = true
+	_status_button.focus_mode = Control.FOCUS_NONE
+	_status_button.tooltip_text = "Click to reconnect the MCP editor bridge"
+	_status_button.add_theme_font_size_override("font_size", 12)
+	_status_button.pressed.connect(_on_status_button_pressed)
+	add_control_to_container(CONTAINER_TOOLBAR, _status_button)
+	_set_status("MCP: Connecting...", Color.YELLOW)
+
+
+func _on_status_button_pressed() -> void:
+	if _mcp_client == null:
+		return
+	_set_status("MCP: Connecting...", Color.YELLOW)
+	_mcp_client.connect_to_server()
+
+
+## Set the button's label and colour. Overrides every font-colour state so the status reads the
+## same whether the button is idle, hovered, or pressed.
+func _set_status(text: String, color: Color) -> void:
+	if _status_button == null:
+		return
+	_status_button.text = text
+	for key in ["font_color", "font_hover_color", "font_pressed_color", "font_focus_color"]:
+		_status_button.add_theme_color_override(key, color)
 
 
 func _on_connected() -> void:
-	if _status_label:
-		_status_label.text = "MCP: Connected"
-		_status_label.add_theme_color_override("font_color", Color.GREEN)
+	_set_status("MCP: Connected", Color.GREEN)
 
 
 func _on_disconnected() -> void:
-	if _status_label:
-		_status_label.text = "MCP: Disconnected"
-		_status_label.add_theme_color_override("font_color", Color.RED)
+	_set_status("MCP: Disconnected", Color.RED)
 
 
 func _on_tool_requested(request_id: String, tool_name: String, args: Dictionary) -> void:
