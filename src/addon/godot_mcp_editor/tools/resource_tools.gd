@@ -260,15 +260,18 @@ func set_tilemap_cells(args: Dictionary) -> Dictionary:
 	if root == null:
 		return {"ok": false, "error": "Failed to instantiate scene"}
 
-	var tilemap: TileMap = null
+	var node: Node = null
 	if node_path == "." or node_path == "":
-		tilemap = root as TileMap
+		node = root
 	else:
-		tilemap = root.get_node_or_null(node_path) as TileMap
+		node = root.get_node_or_null(node_path)
 
-	if tilemap == null:
+	# Support both the modern TileMapLayer (Godot 4.3+) and the legacy TileMap. Their
+	# set_cell signatures differ: TileMapLayer drops the leading layer argument.
+	var is_layer := node is TileMapLayer
+	if node == null or not (is_layer or node is TileMap):
 		root.queue_free()
-		return {"ok": false, "error": "TileMap node not found", "tilemapNodePath": node_path}
+		return {"ok": false, "error": "TileMap/TileMapLayer node not found", "tilemapNodePath": node_path}
 
 	var layer := int(args.get("layer", 0))
 	var cells = args.get("cells", [])
@@ -280,13 +283,14 @@ func set_tilemap_cells(args: Dictionary) -> Dictionary:
 			continue
 		var coords: Dictionary = cell.get("coords", {})
 		var atlas_coords: Dictionary = cell.get("atlasCoords", {})
-		tilemap.set_cell(
-			layer,
-			Vector2i(int(coords.get("x", 0)), int(coords.get("y", 0))),
-			int(cell.get("sourceId", -1)),
-			Vector2i(int(atlas_coords.get("x", 0)), int(atlas_coords.get("y", 0))),
-			int(cell.get("alternativeTile", 0))
-		)
+		var cell_coords := Vector2i(int(coords.get("x", 0)), int(coords.get("y", 0)))
+		var source_id := int(cell.get("sourceId", -1))
+		var atlas := Vector2i(int(atlas_coords.get("x", 0)), int(atlas_coords.get("y", 0)))
+		var alt := int(cell.get("alternativeTile", 0))
+		if is_layer:
+			(node as TileMapLayer).set_cell(cell_coords, source_id, atlas, alt)
+		else:
+			(node as TileMap).set_cell(layer, cell_coords, source_id, atlas, alt)
 
 	var save_result := _save_scene_root(root, scene_path)
 	root.queue_free()
