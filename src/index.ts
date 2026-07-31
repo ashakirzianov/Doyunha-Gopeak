@@ -541,7 +541,14 @@ class GodotServer {
     args: unknown,
   ): Promise<{ content: Array<{ type: string; text?: string; data?: string; mimeType?: string }> }> {
     const params = (args && typeof args === 'object') ? args as Record<string, unknown> : {};
-    const RUNTIME_PORT = 7777;
+    // Configurable so two projects can each run their game under runtime
+    // verification at the same time; a fixed port makes that a collision and
+    // caps concurrent prototyping at one. Mirrors the Godot-side autoload,
+    // which reads the same variable.
+    const runtimePortOverride = Number.parseInt(process.env.GOPEAK_RUNTIME_PORT || '', 10);
+    const RUNTIME_PORT = Number.isInteger(runtimePortOverride) && runtimePortOverride > 0 && runtimePortOverride < 65536
+      ? runtimePortOverride
+      : 7777;
     const RUNTIME_HOST = '127.0.0.1';
     const timeoutOverride = Number.parseInt(process.env.GOPEAK_RUNTIME_TIMEOUT_MS || '', 10);
     const TIMEOUT_MS = Number.isInteger(timeoutOverride) && timeoutOverride > 0 ? timeoutOverride : 10000;
@@ -1779,9 +1786,16 @@ class GodotServer {
       }
 
       this.logDebug(`Launching Godot editor for project: ${args.projectPath}`);
+      // detached + 'ignore': the editor is a long-lived companion to the agent
+      // session, not a subprocess of it. Under the previous `stdio: 'pipe'` with
+      // no drain (unlike run_project below, which reads both streams) the
+      // editor's writes blocked once the 64 KB pipe buffer filled, and being in
+      // gopeak's process group it also died with the session that opened it.
       const process = spawn(this.godotPath, ['-e', '--path', args.projectPath], {
-        stdio: 'pipe',
+        stdio: 'ignore',
+        detached: true,
       });
+      process.unref();
 
       process.on('error', (err: Error) => {
         console.error('Failed to start Godot editor:', err);

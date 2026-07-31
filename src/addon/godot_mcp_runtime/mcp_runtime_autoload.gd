@@ -20,6 +20,15 @@ signal command_received(command: String, params: Dictionary)
 
 func _ready() -> void:
 	name = "MCPRuntime"
+	# Match whatever port the launching gopeak will dial. A fixed 7777 means two
+	# projects cannot both run their game under runtime verification, which caps
+	# concurrent prototyping at one; the env var is inherited from gopeak, which
+	# spawns the game process.
+	var raw := OS.get_environment("GOPEAK_RUNTIME_PORT")
+	if raw.is_valid_int():
+		var configured := int(raw)
+		if configured > 0 and configured < 65536:
+			_port = configured
 	_start_server()
 	print("[MCP Runtime] Autoload ready, server starting on port %d" % _port)
 
