@@ -367,7 +367,7 @@ export function buildToolDefinitions(godotBridgePort: number): MCPToolDefinition
               },
               properties: {
                 type: 'string',
-                description: 'Optional properties to set on the node (as JSON string). Tagged Godot values such as {"position":{"type":"Vector2","x":100,"y":200}} are the most explicit form; common typed properties like Vector2 also accept inferred shapes such as {"position":{"x":100,"y":200}} or {"position":[100,200]}.',
+                description: 'Optional properties to set on the node (as JSON string). Tagged Godot values such as {"position":{"type":"Vector2","x":100,"y":200}} are the most explicit form; common typed properties like Vector2 also accept inferred shapes such as {"position":{"x":100,"y":200}} or {"position":[100,200]}. Resources load via {"type":"Resource","path":"res://..."}; packed arrays via {"type":"PackedVector2Array","value":[x1,y1,x2,y2,...]} (PackedFloat32Array/PackedInt32Array/PackedStringArray likewise take flat value arrays).',
               },
             },
             required: ['projectPath', 'scenePath', 'nodeType', 'nodeName'],
@@ -528,7 +528,7 @@ export function buildToolDefinitions(godotBridgePort: number): MCPToolDefinition
               },
               properties: {
                 type: 'string',
-                description: 'JSON object of properties to set. Tagged Godot values are the most explicit form (e.g., {"position":{"type":"Vector2","x":100,"y":200},"scale":{"type":"Vector2","x":2,"y":2}}), but typed properties like Vector2 also accept inferred {"x","y"} objects and numeric arrays.',
+                description: 'JSON object of properties to set. Tagged Godot values are the most explicit form (e.g., {"position":{"type":"Vector2","x":100,"y":200},"scale":{"type":"Vector2","x":2,"y":2}}), but typed properties like Vector2 also accept inferred {"x","y"} objects and numeric arrays. Resources load via {"type":"Resource","path":"res://..."}; packed arrays via {"type":"PackedVector2Array","value":[x1,y1,x2,y2,...]} (PackedFloat32Array/PackedInt32Array/PackedStringArray likewise take flat value arrays).',
               },
               saveScene: {
                 type: 'boolean',
@@ -1717,7 +1717,7 @@ export function buildToolDefinitions(godotBridgePort: number): MCPToolDefinition
         // ============================================
         {
           name: 'create_tileset',
-          description: 'Creates a TileSet resource from texture atlases. Use for 2D tilemaps in platformers, RPGs, etc. Supports multiple atlas sources.',
+          description: 'Creates a TileSet resource from texture atlases, registering every tile in each atlas grid. Use for 2D tilemaps in platformers, RPGs, etc. Supports multiple atlas sources and optional full-tile collision.',
           inputSchema: {
             type: 'object',
             properties: {
@@ -1728,6 +1728,10 @@ export function buildToolDefinitions(godotBridgePort: number): MCPToolDefinition
               tilesetPath: {
                 type: 'string',
                 description: 'Output path for TileSet (e.g., "resources/world_tiles.tres")',
+              },
+              collisionLayer: {
+                type: 'number',
+                description: 'Optional: physics collision layer bitmask for the TileSet physics layer (default 1). Only used when at least one source has collision: true.',
               },
               sources: {
                 type: 'array',
@@ -1763,6 +1767,10 @@ export function buildToolDefinitions(godotBridgePort: number): MCPToolDefinition
                         x: { type: 'number', description: 'Horizontal offset' },
                         y: { type: 'number', description: 'Vertical offset' },
                       },
+                    },
+                    collision: {
+                      type: 'boolean',
+                      description: 'Optional: give every tile in this source a full-rect collision polygon on the TileSet physics layer (see collisionLayer)',
                     },
                   },
                   required: ['texture', 'tileSize'],

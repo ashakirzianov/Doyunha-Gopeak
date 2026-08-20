@@ -130,6 +130,23 @@ func _parse_value(value, expected_type: int = TYPE_NIL):
 					if resource_path.is_empty():
 						return null
 					return load(resource_path)
+				"PackedVector2Array":
+					return _to_packed_vector2_array(value.get("value", value.get("points", [])))
+				"PackedFloat32Array":
+					var floats := PackedFloat32Array()
+					for v in value.get("value", []):
+						floats.append(float(v))
+					return floats
+				"PackedInt32Array":
+					var ints := PackedInt32Array()
+					for v in value.get("value", []):
+						ints.append(int(v))
+					return ints
+				"PackedStringArray":
+					var strings := PackedStringArray()
+					for v in value.get("value", []):
+						strings.append(str(v))
+					return strings
 
 		match expected_type:
 			TYPE_VECTOR2:
@@ -167,11 +184,51 @@ func _parse_value(value, expected_type: int = TYPE_NIL):
 			TYPE_VECTOR3I:
 				if value.size() >= 3:
 					return Vector3i(value[0], value[1], value[2])
+			TYPE_PACKED_VECTOR2_ARRAY:
+				return _to_packed_vector2_array(value)
+			TYPE_PACKED_FLOAT32_ARRAY:
+				var floats := PackedFloat32Array()
+				for v in value:
+					floats.append(float(v))
+				return floats
+			TYPE_PACKED_INT32_ARRAY:
+				var ints := PackedInt32Array()
+				for v in value:
+					ints.append(int(v))
+				return ints
+			TYPE_PACKED_STRING_ARRAY:
+				var strings := PackedStringArray()
+				for v in value:
+					strings.append(str(v))
+				return strings
 		var result: Array = []
 		for item in value:
 			result.append(_parse_value(item))
 		return result
 	return value
+
+
+func _to_packed_vector2_array(raw) -> PackedVector2Array:
+	var points := PackedVector2Array()
+	if typeof(raw) != TYPE_ARRAY:
+		return points
+	# Accept flat numbers [x, y, x, y, ...], pairs [[x, y], ...], or dicts [{x, y}, ...].
+	if raw.size() > 0 and typeof(raw[0]) in [TYPE_FLOAT, TYPE_INT]:
+		var i := 0
+		while i + 1 < raw.size():
+			points.append(Vector2(raw[i], raw[i + 1]))
+			i += 2
+		return points
+	for item in raw:
+		match typeof(item):
+			TYPE_ARRAY:
+				if item.size() >= 2:
+					points.append(Vector2(item[0], item[1]))
+			TYPE_DICTIONARY:
+				points.append(Vector2(item.get("x", 0), item.get("y", 0)))
+			TYPE_VECTOR2:
+				points.append(item)
+	return points
 
 
 func _get_property_type(node: Node, prop_name: String) -> int:

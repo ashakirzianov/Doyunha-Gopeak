@@ -215,6 +215,19 @@ func create_tileset(args: Dictionary) -> Dictionary:
 	if typeof(sources) != TYPE_ARRAY:
 		sources = []
 
+	var wants_collision := false
+	for source in sources:
+		if typeof(source) == TYPE_DICTIONARY and source.get("collision", false):
+			wants_collision = true
+	# TileSet.tile_size drives the map grid; take it from the first source.
+	if sources.size() > 0 and typeof(sources[0]) == TYPE_DICTIONARY:
+		var first_size: Dictionary = sources[0].get("tileSize", {})
+		if not first_size.is_empty():
+			tileset.tile_size = Vector2i(int(first_size.get("x", 16)), int(first_size.get("y", 16)))
+	if wants_collision:
+		tileset.add_physics_layer()
+		tileset.set_physics_layer_collision_layer(0, int(args.get("collisionLayer", 1)))
+
 	for source in sources:
 		if typeof(source) != TYPE_DICTIONARY:
 			continue
@@ -222,7 +235,9 @@ func create_tileset(args: Dictionary) -> Dictionary:
 		var tex_path := _ensure_res_path(str(source.get("texture", "")))
 		var tex = load(tex_path)
 		if tex == null:
-			continue
+			# A silent skip here used to save an empty, useless TileSet. The usual
+			# cause is a texture the editor has not imported yet.
+			return {"ok": false, "error": "Failed to load texture: " + tex_path + ". If the file exists, it may not be imported yet — trigger a filesystem scan/reimport and retry."}
 		atlas.texture = tex
 
 		var tile_size: Dictionary = source.get("tileSize", {})
@@ -237,6 +252,23 @@ func create_tileset(args: Dictionary) -> Dictionary:
 			atlas.margins = Vector2i(int(off.get("x", 0)), int(off.get("y", 0)))
 
 		tileset.add_source(atlas)
+
+		# Register every tile in the atlas grid; without this the source has no
+		# usable tiles at all (the editor's "auto create tiles" behaviour).
+		var grid := atlas.get_atlas_grid_size()
+		var half := Vector2(atlas.texture_region_size) / 2.0
+		for gy in range(grid.y):
+			for gx in range(grid.x):
+				var coords := Vector2i(gx, gy)
+				atlas.create_tile(coords)
+				if wants_collision and bool(source.get("collision", false)):
+					var tile_data := atlas.get_tile_data(coords, 0)
+					var rect := PackedVector2Array([
+						Vector2(-half.x, -half.y), Vector2(half.x, -half.y),
+						Vector2(half.x, half.y), Vector2(-half.x, half.y),
+					])
+					tile_data.add_collision_polygon(0)
+					tile_data.set_collision_polygon_points(0, 0, rect)
 
 	var save_result := ResourceSaver.save(tileset, tileset_path)
 	if save_result != OK:

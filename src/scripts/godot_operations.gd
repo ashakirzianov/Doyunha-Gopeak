@@ -2224,7 +2224,20 @@ func set_project_setting(params):
     
     # Deserialize value if needed
     var final_value = deserialize_value(value)
-    
+
+    # The MCP schema passes every value as a string; recover the real Variant type.
+    # A quoted "Color(...)" or "1920" stored as a string corrupts project.godot for
+    # typed settings (Color parses as an invalid color name on the next load).
+    if final_value is String:
+        var target_type = typeof(old_value) if had_value else TYPE_NIL
+        if target_type != TYPE_STRING:
+            var parsed = str_to_var(final_value)
+            if parsed != null and typeof(parsed) != TYPE_STRING:
+                if target_type != TYPE_NIL and typeof(parsed) != target_type:
+                    final_value = type_convert(parsed, target_type)
+                else:
+                    final_value = parsed
+
     ProjectSettings.set_setting(setting_path, final_value)
     
     var result = {
@@ -5299,9 +5312,18 @@ func add_input_action(params):
         log_error("No valid events provided")
         quit(1)
     
-    # Format the action value for project.godot
-    # Format: {"deadzone": 0.5, "events": [Object(InputEventKey,"resource_local_to_scene":false,"resource_name":"","device":-1,"window_id":0,"alt_pressed":false,"shift_pressed":false,"ctrl_pressed":false,"meta_pressed":false,"pressed":false,"keycode":32,"physical_keycode":0,"key_label":0,"unicode":0,"echo":false,"script":null)]}
-    var action_value = build_input_action_string(deadzone, events_config)
+    # Store a real Dictionary holding real InputEvent objects: ConfigFile's variant
+    # writer then emits native Object(InputEventKey, ...) syntax. Building the line
+    # as a String gets it stored quoted-and-escaped, which the InputMap can't read.
+    var event_objects: Array = []
+    for event_config in events_config:
+        var event_object = input_event_from_config(event_config)
+        if event_object != null:
+            event_objects.append(event_object)
+    var action_value = {
+        "deadzone": float(deadzone),
+        "events": event_objects
+    }
     
     # Set the input action
     config.set_value("input", action_name, action_value)
@@ -5375,6 +5397,37 @@ func get_keycode_value(key_name: String) -> int:
     return 0
 
 # Helper: Build input action string for project.godot
+# Build a real InputEvent object from an event config dictionary. device -1 matches
+# the editor's own InputMap entries (listen on all devices).
+func input_event_from_config(event: Dictionary):
+    match event.get("class_name", ""):
+        "InputEventKey":
+            var ev = InputEventKey.new()
+            ev.device = -1
+            ev.keycode = event.get("keycode", 0)
+            ev.ctrl_pressed = event.get("ctrl_pressed", false)
+            ev.alt_pressed = event.get("alt_pressed", false)
+            ev.shift_pressed = event.get("shift_pressed", false)
+            return ev
+        "InputEventMouseButton":
+            var ev = InputEventMouseButton.new()
+            ev.device = -1
+            ev.button_index = event.get("button_index", 1)
+            return ev
+        "InputEventJoypadButton":
+            var ev = InputEventJoypadButton.new()
+            ev.device = -1
+            ev.button_index = event.get("button_index", 0)
+            return ev
+        "InputEventJoypadMotion":
+            var ev = InputEventJoypadMotion.new()
+            ev.device = -1
+            ev.axis = event.get("axis", 0)
+            ev.axis_value = event.get("axis_value", 1.0)
+            return ev
+    return null
+
+
 func build_input_action_string(deadzone: float, events: Array) -> String:
     var events_str = []
     
