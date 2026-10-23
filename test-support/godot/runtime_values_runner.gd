@@ -13,8 +13,18 @@ func _fail(message: String) -> void:
 	_failed = true
 
 
-func _set_prop(property: String, value: Variant) -> Dictionary:
-	return _runtime._execute_command("set_property", {"path": "/root/Target", "property": property, "value": value})
+func _set_prop(property: String, value: Variant, path := "/root/Target") -> Dictionary:
+	return _runtime._execute_command("set_property", {"path": path, "property": property, "value": value})
+
+
+## A value that cannot become the target's type must be an error and leave the
+## property as it was, never a zero vector, black, or a cleared resource.
+func _expect_rejected(property: String, value: Variant, path := "/root/Target") -> void:
+	var node := root.get_node(path.trim_prefix("/root/"))
+	var before = node.get(property)
+	var r := _set_prop(property, value, path)
+	if r.get("type") != "error" or node.get(property) != before:
+		_fail("%s <- %s should be rejected and leave %s; got %s, response %s" % [property, JSON.stringify(value), before, node.get(property), JSON.stringify(r)])
 
 
 func _expect(property: String, value: Variant, expected: Variant) -> void:
@@ -42,6 +52,11 @@ func untyped(a, b):
 	_target.name = "Target"
 	_target.set_script(target_script)
 	root.add_child(_target)
+
+	var sprite := Sprite2D.new()
+	sprite.name = "Sprite"
+	sprite.texture = PlaceholderTexture2D.new()
+	_target.add_child(sprite)
 
 	_runtime = load("res://addons/godot_mcp_runtime/mcp_runtime_autoload.gd").new()
 	root.add_child(_runtime)
@@ -81,6 +96,18 @@ func _process(_delta: float) -> bool:
 	var bad: Dictionary = _set_prop("position", "garbage")
 	if bad.get("type") != "error" or _target.position != Vector2(1, 1):
 		_fail("unconvertible Vector2 should be an error and leave the value: %s" % JSON.stringify(bad))
+	_target.position = Vector2(5, 5)
+	_target.modulate = Color(0.5, 0.5, 0.5)
+	_expect_rejected("position", "100")
+	_expect_rejected("position", 100)
+	_expect_rejected("modulate", "1")
+	_expect_rejected("texture", "0", "/root/Target/Sprite")
+	_expect_rejected("texture", "false", "/root/Target/Sprite")
+	_expect_rejected("position", {"x": 1, "y": "a"})
+	_expect_rejected("modulate", {"r": 1, "g": 0, "b": 0, "a": "x"})
+	var cleared := _set_prop("texture", "null", "/root/Target/Sprite")
+	if cleared.get("type") != "property_set" or root.get_node("Target/Sprite").texture != null:
+		_fail("an explicit null should still clear a resource: %s" % JSON.stringify(cleared))
 	if _set_prop("no_such_property", 1).get("type") != "error":
 		_fail("unknown property should be an error")
 

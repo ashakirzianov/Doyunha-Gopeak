@@ -6,6 +6,8 @@ extends Node
 
 const DEFAULT_PORT = 7777
 const PROTOCOL_VERSION = "1.0"
+# Targets the converter may fill by plain type_convert() as a last resort.
+const _SCALAR_TYPES := [TYPE_BOOL, TYPE_INT, TYPE_FLOAT, TYPE_STRING, TYPE_STRING_NAME, TYPE_NODE_PATH]
 
 var _server: TCPServer
 var _clients: Array[StreamPeerTCP] = []
@@ -755,9 +757,13 @@ func _coerce_value(raw: Variant, expected_type: int) -> Dictionary:
 				var rgba = _components(value, ["r", "g", "b"])
 				if rgba != null:
 					var alpha := 1.0
-					if value is Dictionary:
-						alpha = float(value.get("a", 1.0))
+					if value is Dictionary and value.has("a"):
+						if not _is_number(value["a"]):
+							return {"error": "alpha must be a number, got %s" % JSON.stringify(value["a"])}
+						alpha = float(value["a"])
 					elif value is Array and value.size() >= 4:
+						if not _is_number(value[3]):
+							return {"error": "alpha must be a number, got %s" % JSON.stringify(value[3])}
 						alpha = float(value[3])
 					return {"value": Color(rgba[0], rgba[1], rgba[2], alpha)}
 		TYPE_RECT2, TYPE_RECT2I:
@@ -779,7 +785,7 @@ func _coerce_value(raw: Variant, expected_type: int) -> Dictionary:
 		TYPE_NODE_PATH:
 			return {"value": NodePath(str(value))}
 		TYPE_OBJECT:
-			if value == null:
+			if typeof(value) == TYPE_NIL:
 				return {"value": null}
 			var resource_path := ""
 			if value is String:
@@ -791,14 +797,20 @@ func _coerce_value(raw: Variant, expected_type: int) -> Dictionary:
 				if resource != null:
 					return {"value": resource}
 
-	# Last resort for the remaining scalar types. Shapes (arrays, dictionaries,
-	# strings) are never forced: Godot converts those to a zero value silently,
-	# which is the bug this helper exists to stop.
-	if value != null and not (value is Array or value is Dictionary or value is String):
+	# Last resort, for plain scalar targets fed a scalar only. Anything else —
+	# a vector, colour, rect, object, array or dictionary target, or a shape as
+	# input — is an error: type_convert() would hand back a zero vector, black,
+	# or a null resource and report success, the bug this helper exists to stop.
+	if expected_type in _SCALAR_TYPES and typeof(value) in _SCALAR_TYPES:
 		var fallback = type_convert(value, expected_type)
 		if typeof(fallback) == expected_type:
 			return {"value": fallback}
 	return {"error": "expected %s, got %s %s" % [type_string(expected_type), type_string(typeof(raw)), JSON.stringify(raw)]}
+
+
+## A JSON number, or a string that reads as one ("1.5").
+func _is_number(value: Variant) -> bool:
+	return value is int or value is float or (value is String and (value as String).strip_edges().is_valid_float())
 
 
 func _parse_json(text: String) -> Variant:
@@ -840,14 +852,14 @@ func _components(value: Variant, keys: Array) -> Variant:
 	match typeof(value):
 		TYPE_DICTIONARY:
 			for key in keys:
-				if not value.has(key):
+				if not value.has(key) or not _is_number(value[key]):
 					return null
 				out.append(float(value[key]))
 		TYPE_ARRAY:
 			if value.size() < keys.size():
 				return null
 			for i in keys.size():
-				if not (value[i] is int or value[i] is float):
+				if not _is_number(value[i]):
 					return null
 				out.append(float(value[i]))
 		TYPE_STRING:
