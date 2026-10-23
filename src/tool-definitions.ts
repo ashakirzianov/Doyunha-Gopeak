@@ -374,6 +374,40 @@ export function buildToolDefinitions(godotBridgePort: number): MCPToolDefinition
           },
         },
         {
+          name: 'instance_scene',
+          description: 'Instances an existing scene (.tscn) as a child node of another scene, the way dragging a scene into the editor does: saved as an [ext_resource type="PackedScene"] plus a node with instance=ExtResource(...), so later edits to the instanced scene show up everywhere it is used. Use for reusable pieces (enemies, pickups, UI widgets). add_node takes class names only and cannot do this.',
+          inputSchema: {
+            type: 'object',
+            properties: {
+              projectPath: {
+                type: 'string',
+                description: 'Absolute path to project directory containing project.godot. Use the same path across all tool calls in a workflow.',
+              },
+              scenePath: {
+                type: 'string',
+                description: 'Scene to add the instance to, relative to project (e.g., "scenes/Level.tscn")',
+              },
+              instanceScenePath: {
+                type: 'string',
+                description: 'Scene to instance, relative to project or res:// (e.g., "scenes/Enemy.tscn"). Must not contain scenePath.',
+              },
+              parentNodePath: {
+                type: 'string',
+                description: 'Parent node path within scenePath (e.g., "." for root, "Enemies"). Default: "."',
+              },
+              nodeName: {
+                type: 'string',
+                description: 'Optional name for the instance. Default: the instanced scene\'s root name, made unique among its siblings. An explicit name that is already taken is an error.',
+              },
+              properties: {
+                type: 'string',
+                description: 'Optional property overrides on the instance root (as JSON string), same forms as add_node, e.g. {"position":{"x":100,"y":200}}.',
+              },
+            },
+            required: ['projectPath', 'scenePath', 'instanceScenePath'],
+          },
+        },
+        {
           name: 'load_sprite',
           description: 'Assigns a texture to a Sprite2D node in a scene. Use to set character sprites, backgrounds, or UI images. The texture file must exist in the project.',
           inputSchema: {

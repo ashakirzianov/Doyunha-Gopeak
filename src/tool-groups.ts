@@ -2,9 +2,9 @@ import type { ToolGroupDefinition } from './server-types.js';
 
 export const TOOL_GROUPS: Record<string, ToolGroupDefinition> = {
   scene_advanced: {
-    description: 'Advanced scene tree manipulation (duplicate, reparent, sprite)',
-    tools: ['duplicate_node', 'reparent_node', 'load_sprite'],
-    keywords: ['duplicate', 'reparent', 'move node', 'sprite', 'texture', 'copy node'],
+    description: 'Advanced scene tree manipulation (duplicate, reparent, sprite, scene instancing)',
+    tools: ['duplicate_node', 'reparent_node', 'load_sprite', 'instance_scene'],
+    keywords: ['duplicate', 'reparent', 'move node', 'sprite', 'texture', 'copy node', 'instance scene', 'instantiate scene', 'packed scene', 'subscene'],
   },
   uid: {
     description: 'UID management for resources',

@@ -118,6 +118,7 @@ class GodotServer {
     'root_node_type': 'rootNodeType',
     'root_type': 'rootNodeType',
     'parent_node_path': 'parentNodePath',
+    'instance_scene_path': 'instanceScenePath',
     'node_type': 'nodeType',
     'node_name': 'nodeName',
     'texture_path': 'texturePath',
@@ -1536,6 +1537,8 @@ class GodotServer {
           return await this.handleViaBridge('create_scene', normalizedArgs);
         case 'add_node':
           return await this.handleViaBridge('add_node', normalizedArgs);
+        case 'instance_scene':
+          return await this.handleViaBridge('instance_scene', normalizedArgs);
         case 'load_sprite':
           return await this.handleViaBridge('load_sprite', normalizedArgs);
         case 'save_scene':

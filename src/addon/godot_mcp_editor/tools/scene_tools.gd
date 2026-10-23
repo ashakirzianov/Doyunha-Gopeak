@@ -447,6 +447,93 @@ func add_node(args: Dictionary) -> Dictionary:
 	return {"ok": true, "nodeName": node_name, "nodeType": node_type}
 
 
+func instance_scene(args: Dictionary) -> Dictionary:
+	var project_path := str(args.get("projectPath", ""))
+	var scene_path := _to_scene_res_path(project_path, str(args.get("scenePath", "")))
+	var instance_path_raw := str(args.get("instanceScenePath", ""))
+	var parent_node_path := str(args.get("parentNodePath", "."))
+	var node_name := str(args.get("nodeName", ""))
+	var properties := _parse_properties_arg(args.get("properties", {}))
+
+	if instance_path_raw.strip_edges().is_empty():
+		return {"ok": false, "error": "Missing instanceScenePath"}
+	var instance_path := _to_scene_res_path(project_path, instance_path_raw)
+	if not (instance_path.ends_with(".tscn") or instance_path.ends_with(".scn")):
+		return {"ok": false, "error": "instanceScenePath must be a .tscn or .scn file: " + instance_path}
+	if not ResourceLoader.exists(instance_path):
+		return {"ok": false, "error": "Scene to instance not found: " + instance_path}
+	if instance_path == scene_path or _scene_depends_on(instance_path, scene_path, {}):
+		return {"ok": false, "error": "Cyclic instance: %s already contains %s" % [instance_path, scene_path]}
+
+	var packed := load(instance_path) as PackedScene
+	if not packed:
+		return {"ok": false, "error": "Failed to load scene to instance: " + instance_path}
+
+	var result := _load_scene(scene_path)
+	if not result[1].is_empty():
+		return result[1]
+
+	var root := result[0] as Node
+	var parent := _find_node(root, parent_node_path)
+	if not parent:
+		root.queue_free()
+		return {"ok": false, "error": "Parent node not found: " + parent_node_path}
+	if not node_name.is_empty() and parent.has_node(NodePath(node_name)):
+		root.queue_free()
+		return {"ok": false, "error": "Parent %s already has a child named %s" % [parent_node_path, node_name]}
+
+	# GEN_EDIT_STATE_INSTANCE keeps the link to the source scene, so pack() writes
+	# an `instance=ExtResource(...)` node plus only the properties overridden here.
+	var instance := packed.instantiate(PackedScene.GEN_EDIT_STATE_INSTANCE)
+	if not instance:
+		root.queue_free()
+		return {"ok": false, "error": "Failed to instantiate: " + instance_path}
+	if not node_name.is_empty():
+		instance.name = node_name
+	parent.add_child(instance, true)
+	# Own the instance root only. Owning its children too would bake the source
+	# scene's nodes into this one instead of referencing them.
+	instance.owner = root
+	_set_node_properties(instance, properties)
+
+	var final_name := str(instance.name)
+	var final_path := str(root.get_path_to(instance))
+	var err := _save_scene(root, scene_path)
+	if not err.is_empty():
+		return err
+
+	return {"ok": true, "nodeName": final_name, "nodePath": final_path, "instanceScenePath": instance_path, "scenePath": scene_path}
+
+
+## True when the scene at `path` instances or inherits `target`, at any depth.
+func _scene_depends_on(path: String, target: String, visited: Dictionary) -> bool:
+	if visited.has(path):
+		return false
+	visited[path] = true
+	for dep in ResourceLoader.get_dependencies(path):
+		var dep_path := _dependency_path(str(dep))
+		if dep_path.is_empty():
+			continue
+		if dep_path == target:
+			return true
+		if (dep_path.ends_with(".tscn") or dep_path.ends_with(".scn")) and _scene_depends_on(dep_path, target, visited):
+			return true
+	return false
+
+
+## get_dependencies() entries look like `uid://…::Type::res://path` (or older
+## `res://path::Type`); return the res:// path.
+func _dependency_path(entry: String) -> String:
+	for part in entry.split("::"):
+		if part.begins_with("res://"):
+			return part
+	if entry.begins_with("uid://"):
+		var id := ResourceUID.text_to_id(entry.split("::")[0])
+		if ResourceUID.has_id(id):
+			return ResourceUID.get_id_path(id)
+	return ""
+
+
 func delete_node(args: Dictionary) -> Dictionary:
 	var project_path := str(args.get("projectPath", ""))
 	var scene_path := _to_scene_res_path(project_path, str(args.get("scenePath", "")))

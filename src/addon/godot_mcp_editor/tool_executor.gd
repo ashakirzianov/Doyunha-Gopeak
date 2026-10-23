@@ -60,6 +60,7 @@ func _init_tools() -> void:
 		"create_scene": [_scene_tools, "create_scene"],
 		"list_scene_nodes": [_scene_tools, "list_scene_nodes"],
 		"add_node": [_scene_tools, "add_node"],
+		"instance_scene": [_scene_tools, "instance_scene"],
 		"delete_node": [_scene_tools, "delete_node"],
 		"duplicate_node": [_scene_tools, "duplicate_node"],
 		"reparent_node": [_scene_tools, "reparent_node"],

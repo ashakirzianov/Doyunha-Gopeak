@@ -101,6 +101,7 @@ function resolveGodotPath() {
     process.env.GODOT_PATH,
     '/home/yun/.local/bin/godot4',
     '/home/yun/.local/bin/godot',
+    '/Applications/Godot.app/Contents/MacOS/Godot',
   ].filter(Boolean);
 
   for (const candidate of candidates) {
@@ -164,6 +165,45 @@ function testSceneToolsVectorRegression() {
   }
 }
 
+// Runs a SceneTree script from test-support/godot/ headless in a throwaway
+// project holding the given addon files; the runner prints {"ok":true} or exits 1.
+function runGodotRunner(label, runnerFile, addonFiles) {
+  const godotPath = resolveGodotPath();
+  if (!godotPath) {
+    console.log(`${label} skipped (Godot not found)`);
+    return;
+  }
+
+  const projectDir = mkdtempSync(join(tmpdir(), 'gopeak-regression-'));
+  try {
+    for (const file of addonFiles) {
+      const target = join(projectDir, file.replace(/^src\/addon\//, 'addons/'));
+      mkdirSync(join(target, '..'), { recursive: true });
+      cpSync(file, target);
+    }
+    cpSync(join('test-support', 'godot', runnerFile), join(projectDir, 'runner.gd'));
+    writeFileSync(join(projectDir, 'project.godot'), `config_version=5\n\n[application]\nconfig/name="GopeakRegression"\n`);
+
+    const run = spawnSync(godotPath, ['--headless', '--path', projectDir, '--script', join(projectDir, 'runner.gd')], {
+      encoding: 'utf8',
+      timeout: 120000,
+    });
+    const output = `${run.stdout}\n${run.stderr}`;
+    if (run.status !== 0) {
+      throw new Error(`${label} failed:\n${output.trim()}`);
+    }
+    assert.match(output, /"ok"\s*:\s*true/, `${label}: runner should report success JSON`);
+  } finally {
+    rmSync(projectDir, { recursive: true, force: true });
+  }
+}
+
+function testSceneToolsGapsRegression() {
+  runGodotRunner('scene tools gaps regression', 'scene_tools_gaps_runner.gd', [
+    'src/addon/godot_mcp_editor/tools/scene_tools.gd',
+  ]);
+}
+
 async function testEditorStatusPortConflict() {
   await withOccupiedBridgePort(async () => {
     const proc = spawn(process.execPath, ['./build/index.js'], {
@@ -212,6 +252,7 @@ async function testEditorStatusPortConflict() {
 async function main() {
   testStaleDisconnectRegression();
   testSceneToolsVectorRegression();
+  testSceneToolsGapsRegression();
   assert.match(INDEX_SOURCE, /key\.startsWith\('_'\)/, 'index.ts should preserve sentinel keys like _type during parameter normalization');
   assert.match(INDEX_SOURCE, /@file:/, 'index.ts should pass operation params via @file: temp payloads');
   assert.match(OPERATIONS_SOURCE, /params_json\.begins_with\("@file:"\)/, 'godot_operations.gd should load params from @file: payloads');
