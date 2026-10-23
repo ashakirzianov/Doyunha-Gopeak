@@ -1168,7 +1168,7 @@ export function buildToolDefinitions(godotBridgePort: number): MCPToolDefinition
         },
         {
           name: 'set_runtime_property',
-          description: 'Set a property on a node in a running Godot instance',
+          description: 'Set a property on a node in a running Godot instance. The value is converted to the property\'s type; an unconvertible value or unknown property is an error rather than a silent zero.',
           inputSchema: {
             type: 'object',
             properties: {
@@ -1186,7 +1186,7 @@ export function buildToolDefinitions(godotBridgePort: number): MCPToolDefinition
               },
               value: {
                 type: 'string',
-                description: 'Value to set (Godot handles type conversion)',
+                description: 'Value to set, as JSON text or a plain string: booleans "true"/"false", numbers "42", Vector2 "[10, 20]" or {"x": 10, "y": 20} or "Vector2(10, 20)", Color "#ff0000" or {"r": 1, "g": 0, "b": 0}, resources "res://path". A String property takes the text as-is.',
               },
             },
             required: ['projectPath', 'nodePath', 'property', 'value'],
@@ -1213,7 +1213,7 @@ export function buildToolDefinitions(godotBridgePort: number): MCPToolDefinition
               args: {
                 type: 'array',
                 items: { type: 'string' },
-                description: 'Arguments to pass to the method (as JSON strings)',
+                description: 'Arguments to pass to the method, each as JSON text ("true", "3", "[10, 20]", {"x": 1, "y": 2}); each is converted to the type the method declares for that parameter. A plain word that is not JSON passes as a string.',
               },
             },
             required: ['projectPath', 'nodePath', 'method'],

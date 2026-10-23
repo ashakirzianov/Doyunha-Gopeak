@@ -167,7 +167,7 @@ function testSceneToolsVectorRegression() {
 
 // Runs a SceneTree script from test-support/godot/ headless in a throwaway
 // project holding the given addon files; the runner prints {"ok":true} or exits 1.
-function runGodotRunner(label, runnerFile, addonFiles) {
+function runGodotRunner(label, runnerFile, addonFiles, env = {}) {
   const godotPath = resolveGodotPath();
   if (!godotPath) {
     console.log(`${label} skipped (Godot not found)`);
@@ -187,6 +187,7 @@ function runGodotRunner(label, runnerFile, addonFiles) {
     const run = spawnSync(godotPath, ['--headless', '--path', projectDir, '--script', join(projectDir, 'runner.gd')], {
       encoding: 'utf8',
       timeout: 120000,
+      env: { ...process.env, ...env },
     });
     const output = `${run.stdout}\n${run.stderr}`;
     if (run.status !== 0) {
@@ -202,6 +203,13 @@ function testSceneToolsGapsRegression() {
   runGodotRunner('scene tools gaps regression', 'scene_tools_gaps_runner.gd', [
     'src/addon/godot_mcp_editor/tools/scene_tools.gd',
   ]);
+}
+
+function testRuntimeValuesRegression() {
+  // The autoload starts its TCP server on load; keep it off the default 7777.
+  runGodotRunner('runtime values regression', 'runtime_values_runner.gd', [
+    'src/addon/godot_mcp_runtime/mcp_runtime_autoload.gd',
+  ], { GOPEAK_RUNTIME_PORT: String(20000 + Math.floor(Math.random() * 20000)) });
 }
 
 async function testEditorStatusPortConflict() {
@@ -253,6 +261,7 @@ async function main() {
   testStaleDisconnectRegression();
   testSceneToolsVectorRegression();
   testSceneToolsGapsRegression();
+  testRuntimeValuesRegression();
   assert.match(INDEX_SOURCE, /key\.startsWith\('_'\)/, 'index.ts should preserve sentinel keys like _type during parameter normalization');
   assert.match(INDEX_SOURCE, /@file:/, 'index.ts should pass operation params via @file: temp payloads');
   assert.match(OPERATIONS_SOURCE, /params_json\.begins_with\("@file:"\)/, 'godot_operations.gd should load params from @file: payloads');

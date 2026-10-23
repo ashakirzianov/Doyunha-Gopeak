@@ -204,8 +204,19 @@ func _cmd_set_property(params: Dictionary) -> Dictionary:
 	if node == null:
 		return {"type": "error", "message": "Node not found: " + node_path}
 	
+	var info := _property_info(node, property)
+	if info.is_empty():
+		return {"type": "error", "message": "Property not found on %s: %s" % [node_path, property]}
 	var old_value = node.get(property)
-	node.set(property, _deserialize_value(value))
+	var expected_type := int(info.get("type", TYPE_NIL))
+	# An untyped script var: take the shape of what it holds, except numbers,
+	# where an int would truncate a float the caller meant.
+	if expected_type == TYPE_NIL and old_value != null and not (typeof(old_value) in [TYPE_INT, TYPE_FLOAT]):
+		expected_type = typeof(old_value)
+	var converted := _coerce_value(value, expected_type)
+	if converted.has("error"):
+		return {"type": "error", "message": "Cannot set %s.%s: %s" % [node_path, property, converted["error"]]}
+	node.set(property, converted["value"])
 	
 	return {
 		"type": "property_set",
@@ -231,9 +242,14 @@ func _cmd_call_method(params: Dictionary) -> Dictionary:
 	if not node.has_method(method):
 		return {"type": "error", "message": "Method not found: " + method}
 	
+	var arg_types := _method_arg_types(node, method)
 	var deserialized_args = []
-	for arg in args:
-		deserialized_args.append(_deserialize_value(arg))
+	for i in args.size():
+		var expected_type: int = arg_types[i] if i < arg_types.size() else TYPE_NIL
+		var converted := _coerce_value(args[i], expected_type)
+		if converted.has("error"):
+			return {"type": "error", "message": "Cannot convert argument %d of %s: %s" % [i, method, converted["error"]]}
+		deserialized_args.append(converted["value"])
 	
 	var result = node.callv(method, deserialized_args)
 	
@@ -640,6 +656,217 @@ func _deserialize_value(value) -> Variant:
 		return arr
 	else:
 		return value
+
+
+func _property_info(node: Object, property: String) -> Dictionary:
+	for prop in node.get_property_list():
+		if str(prop.get("name", "")) == property:
+			return prop
+	return {}
+
+
+func _method_arg_types(node: Object, method: String) -> Array:
+	var script = node.get_script()
+	var lists: Array = []
+	if script:
+		lists.append(script.get_script_method_list())
+	lists.append(node.get_method_list())
+	for list in lists:
+		for info in list:
+			if str(info.get("name", "")) == method:
+				var types: Array = []
+				for arg in info.get("args", []):
+					types.append(int(arg.get("type", TYPE_NIL)))
+				return types
+	return []
+
+
+## Convert a value that arrived as JSON into the type the target expects.
+## MCP clients send what the tool schema asks for — usually a string such as
+## "false", "[10, 20]", "{\"x\": 1, \"y\": 2}" or "Vector2(10, 20)" — or a real
+## JSON value. Assigning those as-is made every Vector2 (0, 0) and every
+## non-empty string `true`. Returns {"value": v} or {"error": message}.
+func _coerce_value(raw: Variant, expected_type: int) -> Dictionary:
+	var value = raw
+	if value is String:
+		match expected_type:
+			TYPE_STRING, TYPE_STRING_NAME, TYPE_NODE_PATH:
+				var text: String = value
+				if text.length() >= 2 and text.begins_with("\"") and text.ends_with("\""):
+					var unquoted = _parse_json(text)
+					if unquoted is String:
+						text = unquoted
+				if expected_type == TYPE_STRING_NAME:
+					return {"value": StringName(text)}
+				if expected_type == TYPE_NODE_PATH:
+					return {"value": NodePath(text)}
+				return {"value": text}
+		value = _parse_string_value(value)
+	value = _deserialize_value(value)
+	if expected_type == TYPE_NIL or typeof(value) == expected_type:
+		return {"value": value}
+
+	match expected_type:
+		TYPE_BOOL:
+			if value is int or value is float:
+				return {"value": value != 0}
+			if value is String:
+				match (value as String).strip_edges().to_lower():
+					"true", "1", "yes", "on":
+						return {"value": true}
+					"false", "0", "no", "off", "":
+						return {"value": false}
+		TYPE_INT:
+			if value is float or value is bool:
+				return {"value": int(value)}
+			if value is String and (value as String).is_valid_float():
+				return {"value": int(float(value))}
+		TYPE_FLOAT:
+			if value is int or value is bool:
+				return {"value": float(value)}
+			if value is String and (value as String).is_valid_float():
+				return {"value": float(value)}
+		TYPE_VECTOR2, TYPE_VECTOR2I, TYPE_VECTOR3, TYPE_VECTOR3I, TYPE_VECTOR4, TYPE_VECTOR4I:
+			var keys := ["x", "y", "z", "w"].slice(0, _vector_size(expected_type))
+			var parts = _components(value, keys)
+			if parts != null:
+				return {"value": _make_vector(expected_type, parts)}
+		TYPE_COLOR:
+			if value is String:
+				var sentinel := Color(0.12345, 0.0, 0.0, 0.0)
+				var color := Color.from_string(value, sentinel)
+				if color != sentinel:
+					return {"value": color}
+			else:
+				var rgba = _components(value, ["r", "g", "b"])
+				if rgba != null:
+					var alpha := 1.0
+					if value is Dictionary:
+						alpha = float(value.get("a", 1.0))
+					elif value is Array and value.size() >= 4:
+						alpha = float(value[3])
+					return {"value": Color(rgba[0], rgba[1], rgba[2], alpha)}
+		TYPE_RECT2, TYPE_RECT2I:
+			var r = null
+			if value is Dictionary and value.has("position") and value.has("size"):
+				var pos = _components(value["position"], ["x", "y"])
+				var size = _components(value["size"], ["x", "y"])
+				if pos != null and size != null:
+					r = pos + size
+			else:
+				r = _components(value, ["x", "y", "width", "height"])
+			if r != null:
+				var rect := Rect2(r[0], r[1], r[2], r[3])
+				return {"value": rect if expected_type == TYPE_RECT2 else Rect2i(rect)}
+		TYPE_STRING:
+			return {"value": str(value)}
+		TYPE_STRING_NAME:
+			return {"value": StringName(str(value))}
+		TYPE_NODE_PATH:
+			return {"value": NodePath(str(value))}
+		TYPE_OBJECT:
+			if value == null:
+				return {"value": null}
+			var resource_path := ""
+			if value is String:
+				resource_path = value
+			elif value is Dictionary:
+				resource_path = str(value.get("path", ""))
+			if resource_path.begins_with("res://") or resource_path.begins_with("uid://"):
+				var resource = load(resource_path)
+				if resource != null:
+					return {"value": resource}
+
+	# Last resort for the remaining scalar types. Shapes (arrays, dictionaries,
+	# strings) are never forced: Godot converts those to a zero value silently,
+	# which is the bug this helper exists to stop.
+	if value != null and not (value is Array or value is Dictionary or value is String):
+		var fallback = type_convert(value, expected_type)
+		if typeof(fallback) == expected_type:
+			return {"value": fallback}
+	return {"error": "expected %s, got %s %s" % [type_string(expected_type), type_string(typeof(raw)), JSON.stringify(raw)]}
+
+
+func _parse_json(text: String) -> Variant:
+	var json := JSON.new()
+	if json.parse(text) != OK:
+		return null
+	return json.data
+
+
+## A string from an MCP client: JSON first ("false", "3", "[1, 2]", "{...}"),
+## then a Godot constructor ("Vector2(1, 2)"); otherwise the string itself.
+func _parse_string_value(text: String) -> Variant:
+	var trimmed := text.strip_edges()
+	if trimmed.is_empty():
+		return text
+	var json := JSON.new()
+	if json.parse(trimmed) == OK:
+		return json.data
+	if RegEx.create_from_string("^[A-Za-z][A-Za-z0-9_]*\\(.*\\)$").search(trimmed):
+		var parsed = str_to_var(trimmed)
+		if parsed != null:
+			return parsed
+	return text
+
+
+func _vector_size(type: int) -> int:
+	match type:
+		TYPE_VECTOR2, TYPE_VECTOR2I:
+			return 2
+		TYPE_VECTOR3, TYPE_VECTOR3I:
+			return 3
+	return 4
+
+
+## Numeric components from {x, y, …}, [x, y, …], "(x, y, …)" or a Vector*;
+## null when the shape doesn't fit.
+func _components(value: Variant, keys: Array) -> Variant:
+	var out: Array = []
+	match typeof(value):
+		TYPE_DICTIONARY:
+			for key in keys:
+				if not value.has(key):
+					return null
+				out.append(float(value[key]))
+		TYPE_ARRAY:
+			if value.size() < keys.size():
+				return null
+			for i in keys.size():
+				if not (value[i] is int or value[i] is float):
+					return null
+				out.append(float(value[i]))
+		TYPE_STRING:
+			var parts: PackedStringArray = (value as String).strip_edges().trim_prefix("(").trim_suffix(")").split(",")
+			if parts.size() < keys.size():
+				return null
+			for i in keys.size():
+				if not parts[i].strip_edges().is_valid_float():
+					return null
+				out.append(float(parts[i]))
+		TYPE_VECTOR2, TYPE_VECTOR2I, TYPE_VECTOR3, TYPE_VECTOR3I, TYPE_VECTOR4, TYPE_VECTOR4I:
+			for i in keys.size():
+				if i >= _vector_size(typeof(value)):
+					return null
+				out.append(float(value[i]))
+		_:
+			return null
+	return out
+
+
+func _make_vector(type: int, c: Array) -> Variant:
+	match type:
+		TYPE_VECTOR2:
+			return Vector2(c[0], c[1])
+		TYPE_VECTOR2I:
+			return Vector2i(int(c[0]), int(c[1]))
+		TYPE_VECTOR3:
+			return Vector3(c[0], c[1], c[2])
+		TYPE_VECTOR3I:
+			return Vector3i(int(c[0]), int(c[1]), int(c[2]))
+		TYPE_VECTOR4:
+			return Vector4(c[0], c[1], c[2], c[3])
+	return Vector4i(int(c[0]), int(c[1]), int(c[2]), int(c[3]))
 
 
 func _resolve_mouse_button(raw: Variant) -> int:
