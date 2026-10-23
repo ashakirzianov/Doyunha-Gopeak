@@ -718,9 +718,12 @@ func connect_signal(args: Dictionary) -> Dictionary:
 		root.queue_free()
 		return {"ok": false, "error": "Signal not found on source: " + signal_name}
 
+	# PackedScene.pack() saves only connections flagged CONNECT_PERSIST — it is what
+	# the editor sets when you connect from the Node dock. Without it the tool
+	# reported success and wrote no [connection] line.
 	var callable := Callable(target, method_name)
 	if not source.is_connected(signal_name, callable):
-		var connect_result := source.connect(signal_name, callable, flags)
+		var connect_result := source.connect(signal_name, callable, flags | CONNECT_PERSIST)
 		if connect_result != OK:
 			root.queue_free()
 			return {"ok": false, "error": "Failed to connect signal: " + str(connect_result)}

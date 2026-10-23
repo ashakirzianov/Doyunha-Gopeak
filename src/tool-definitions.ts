@@ -1031,7 +1031,7 @@ export function buildToolDefinitions(godotBridgePort: number): MCPToolDefinition
               },
               flags: {
                 type: 'number',
-                description: 'Optional: connection flags (0=default, 1=deferred, 2=persist, 4=one_shot)',
+                description: 'Optional: connection flags (0=default, 1=deferred, 4=one_shot). Persist (2) is always added, so the connection is saved to the scene file.',
               },
             },
             required: ['projectPath', 'scenePath', 'sourceNodePath', 'signalName', 'targetNodePath', 'methodName'],
