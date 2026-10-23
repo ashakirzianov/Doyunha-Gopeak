@@ -6,8 +6,12 @@ extends Node
 
 const DEFAULT_PORT = 7777
 const PROTOCOL_VERSION = "1.0"
-# Targets the converter may fill by plain type_convert() as a last resort.
+# The converter's last resort, plain type_convert(), may fill only these
+# targets, and only from these inputs. Strings never reach it: their valid forms
+# are handled by the type-specific branches, and type_convert() would turn
+# "abc" into 0 or true.
 const _SCALAR_TYPES := [TYPE_BOOL, TYPE_INT, TYPE_FLOAT, TYPE_STRING, TYPE_STRING_NAME, TYPE_NODE_PATH]
+const _SCALAR_INPUTS := [TYPE_BOOL, TYPE_INT, TYPE_FLOAT]
 
 var _server: TCPServer
 var _clients: Array[StreamPeerTCP] = []
@@ -797,11 +801,12 @@ func _coerce_value(raw: Variant, expected_type: int) -> Dictionary:
 				if resource != null:
 					return {"value": resource}
 
-	# Last resort, for plain scalar targets fed a scalar only. Anything else —
-	# a vector, colour, rect, object, array or dictionary target, or a shape as
-	# input — is an error: type_convert() would hand back a zero vector, black,
-	# or a null resource and report success, the bug this helper exists to stop.
-	if expected_type in _SCALAR_TYPES and typeof(value) in _SCALAR_TYPES:
+	# Last resort, for plain scalar targets fed a bool or number only. Anything
+	# else — a vector, colour, rect, object, array or dictionary target, or a
+	# string or shape as input — is an error: type_convert() would hand back
+	# a zero, black, or a null resource and report success, the bug this helper
+	# exists to stop.
+	if expected_type in _SCALAR_TYPES and typeof(value) in _SCALAR_INPUTS:
 		var fallback = type_convert(value, expected_type)
 		if typeof(fallback) == expected_type:
 			return {"value": fallback}

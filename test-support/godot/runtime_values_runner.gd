@@ -39,11 +39,14 @@ func _initialize() -> void:
 	target_script.source_code = """extends Node2D
 var flag: bool = true
 var count: int = 0
+var speed: float = 1.0
 var label_text: String = ""
 var untyped_vec = Vector2.ZERO
 var untyped_num = 1
 func move(to: Vector2, fast: bool, steps: int) -> String:
 	return "%s %s %s %s" % [to, fast, steps, typeof(steps)]
+func takes_int(n: int) -> int:
+	return n
 func untyped(a, b):
 	return [a, b]
 """
@@ -84,6 +87,10 @@ func _process(_delta: float) -> bool:
 	_expect("flag", 1, true)
 	_expect("count", "42", 42)
 	_expect("count", 3.0, 3)
+	_expect("count", "5", 5)
+	_expect("count", "2.9", 2)
+	_expect("speed", "3", 3.0)
+	_expect("label_text", 42, "42")
 	_expect("label_text", "123", "123")
 	_expect("label_text", "\"quoted\"", "quoted")
 	_expect("untyped_vec", "[1, 2]", Vector2(1, 2))
@@ -105,6 +112,18 @@ func _process(_delta: float) -> bool:
 	_expect_rejected("texture", "false", "/root/Target/Sprite")
 	_expect_rejected("position", {"x": 1, "y": "a"})
 	_expect_rejected("modulate", {"r": 1, "g": 0, "b": 0, "a": "x"})
+	# A string that is not a valid form of a scalar target is an error too,
+	# never 0, 0.0 or true.
+	_target.count = 7
+	_target.speed = 1.5
+	_target.flag = false
+	_expect_rejected("count", "abc")
+	_expect_rejected("count", "")
+	_expect_rejected("speed", "abc")
+	_expect_rejected("flag", "abc")
+	var bad_arg: Dictionary = _runtime._execute_command("call_method", {"path": "/root/Target", "method": "takes_int", "args": ["abc"]})
+	if bad_arg.get("type") != "error":
+		_fail("typed int method argument \"abc\" should be an error: %s" % JSON.stringify(bad_arg))
 	var cleared := _set_prop("texture", "null", "/root/Target/Sprite")
 	if cleared.get("type") != "property_set" or root.get_node("Target/Sprite").texture != null:
 		_fail("an explicit null should still clear a resource: %s" % JSON.stringify(cleared))
