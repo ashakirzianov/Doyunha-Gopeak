@@ -20,7 +20,7 @@ export function buildToolDefinitions(godotBridgePort: number): MCPToolDefinition
         },
         {
           name: 'run_project',
-          description: 'Launches a Godot project in a new window and captures output. Use to test gameplay or verify script behavior. Runs until stop_project is called. Use get_debug_output to retrieve logs.',
+          description: 'Launches a Godot project in a new window and captures output. Use to test gameplay or verify script behavior. Runs until stop_project is called. Use get_debug_output to retrieve logs. Ends a stale run of the same project still holding the runtime port (e.g. an editor-embedded game) first, and waits until the new game\'s runtime addon answers, so runtime tools reach the new game.',
           inputSchema: {
             type: 'object',
             properties: {
@@ -49,11 +49,15 @@ export function buildToolDefinitions(godotBridgePort: number): MCPToolDefinition
         },
         {
           name: 'stop_project',
-          description: 'Terminates the currently running Godot project process. Use to stop a project started with run_project. No effect if no project is running.',
+          description: 'Ends the running game: the process run_project started, plus any other run of the same project still holding the runtime port (such as a game the editor runs embedded). Waits until they have exited. Errors if nothing was running.',
           inputSchema: {
             type: 'object',
             properties: {
-              reason: { type: 'string', description: 'Brief explanation of why you are calling this tool' }
+              reason: { type: 'string', description: 'Brief explanation of why you are calling this tool' },
+              projectPath: {
+                type: 'string',
+                description: 'Optional: absolute path to the project whose run to end. Defaults to the project of the last run_project call.',
+              },
             },
             required: ['reason'],
           },

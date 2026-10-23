@@ -2,6 +2,8 @@ export interface GodotProcess {
   process: any;
   output: string[];
   errors: string[];
+  pid?: number;
+  projectPath?: string;
 }
 
 export interface GodotServerConfig {

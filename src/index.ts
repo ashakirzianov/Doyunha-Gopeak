@@ -13,6 +13,19 @@ import { existsSync, readdirSync, mkdirSync, readFileSync, appendFileSync, write
 import { tmpdir } from 'os';
 import { spawn } from 'child_process';
 import { createConnection as createTcpConnection } from 'node:net';
+import {
+  RUNTIME_HOST,
+  getRuntimePort,
+  identityFromMessage,
+  parseRuntimeFrames,
+  probeRuntime,
+  samePath,
+  terminatePid,
+  waitFor,
+  waitForRuntimePortFree,
+  type RuntimeIdentity,
+  type RuntimeProbe,
+} from './runtime-process.js';
 import { promisify } from 'util';
 import { exec } from 'child_process';
 
@@ -542,15 +555,7 @@ class GodotServer {
     args: unknown,
   ): Promise<{ content: Array<{ type: string; text?: string; data?: string; mimeType?: string }> }> {
     const params = (args && typeof args === 'object') ? args as Record<string, unknown> : {};
-    // Configurable so two projects can each run their game under runtime
-    // verification at the same time; a fixed port makes that a collision and
-    // caps concurrent prototyping at one. Mirrors the Godot-side autoload,
-    // which reads the same variable.
-    const runtimePortOverride = Number.parseInt(process.env.GOPEAK_RUNTIME_PORT || '', 10);
-    const RUNTIME_PORT = Number.isInteger(runtimePortOverride) && runtimePortOverride > 0 && runtimePortOverride < 65536
-      ? runtimePortOverride
-      : 7777;
-    const RUNTIME_HOST = '127.0.0.1';
+    const RUNTIME_PORT = getRuntimePort();
     const timeoutOverride = Number.parseInt(process.env.GOPEAK_RUNTIME_TIMEOUT_MS || '', 10);
     const TIMEOUT_MS = Number.isInteger(timeoutOverride) && timeoutOverride > 0 ? timeoutOverride : 10000;
     const expectsScreenshot = command === 'capture_screenshot' || command === 'capture_viewport';
@@ -564,9 +569,24 @@ class GodotServer {
     };
 
     return new Promise((resolve) => {
-      const socket = createTcpConnection({ port: RUNTIME_PORT, host: RUNTIME_HOST }, () => {
+      // The command waits for the runtime's welcome, which names the process
+      // answering. If run_project started a game and someone else holds the
+      // port (an editor-embedded run, a leftover -d run), refuse rather than
+      // drive the stale instance. A runtime that never greets (older addon)
+      // still gets the command after a short grace period.
+      let commandSent = false;
+      const sendCommand = () => {
+        if (commandSent || resolved) {
+          return;
+        }
+        commandSent = true;
+        clearTimeout(greetingTimer);
         const payload = JSON.stringify({ command, params: runtimeParams, id: Date.now() });
         socket.write(payload + '\n');
+      };
+      let greetingTimer: NodeJS.Timeout | undefined;
+      const socket = createTcpConnection({ port: RUNTIME_PORT, host: RUNTIME_HOST }, () => {
+        greetingTimer = setTimeout(sendCommand, 1500);
       });
 
       let responseBuffer = Buffer.alloc(0);
@@ -576,6 +596,7 @@ class GodotServer {
           return;
         }
         resolved = true;
+        clearTimeout(greetingTimer);
         socket.destroy();
         cleanupScreenshotDir();
         resolve({
@@ -589,6 +610,7 @@ class GodotServer {
         }
         resolved = true;
         clearTimeout(timer);
+        clearTimeout(greetingTimer);
         socket.destroy();
 
         if (parsed.type === 'screenshot_file' && parsed.path) {
@@ -637,47 +659,30 @@ class GodotServer {
       };
 
       socket.on('data', (chunk: Buffer) => {
-        responseBuffer = Buffer.concat([responseBuffer, Buffer.from(chunk)]);
-        const parsedMessages: any[] = [];
+        const parsed = parseRuntimeFrames(Buffer.concat([responseBuffer, Buffer.from(chunk)]));
+        responseBuffer = parsed.rest;
+        const parsedMessages = parsed.messages;
 
-        const parseCandidate = (candidate: string) => {
-          const trimmed = candidate.trim();
-          if (!trimmed) {
-            return;
+        if (!commandSent) {
+          const welcome = parsedMessages.find((message) => message?.type === 'welcome');
+          if (welcome) {
+            const mismatch = this.describeStaleRuntime(identityFromMessage(welcome));
+            if (mismatch) {
+              resolved = true;
+              clearTimeout(timer);
+              clearTimeout(greetingTimer);
+              socket.destroy();
+              cleanupScreenshotDir();
+              resolve({
+                content: [{ type: 'text', text: `Refused to send '${command}': ${mismatch}` }],
+              });
+              return;
+            }
+            sendCommand();
           }
-          try {
-            parsedMessages.push(JSON.parse(trimmed));
-          } catch {
-            // Ignore malformed frame/line and keep scanning.
-          }
-        };
-
-        // First, parse the framed payload format emitted by Godot's StreamPeerTCP.put_utf8_string().
-        let offset = 0;
-        while (offset + 4 <= responseBuffer.length) {
-          const frameLength = responseBuffer.readUInt32LE(offset);
-          if (frameLength <= 0 || offset + 4 + frameLength > responseBuffer.length) {
-            break;
-          }
-
-          const frame = responseBuffer.subarray(offset + 4, offset + 4 + frameLength).toString('utf8');
-          parseCandidate(frame);
-          offset += 4 + frameLength;
-        }
-        if (offset > 0) {
-          responseBuffer = responseBuffer.subarray(offset);
         }
 
-        // Fallback for plain newline-delimited JSON payloads.
-        let newlineIndex = responseBuffer.indexOf(0x0a);
-        while (newlineIndex !== -1) {
-          const line = responseBuffer.subarray(0, newlineIndex).toString('utf8');
-          responseBuffer = responseBuffer.subarray(newlineIndex + 1);
-          parseCandidate(line);
-          newlineIndex = responseBuffer.indexOf(0x0a);
-        }
-
-        if (parsedMessages.length > 0) {
+        if (commandSent && parsedMessages.length > 0) {
           const candidate = parsedMessages.find((message) => message?.type === 'screenshot_file' && message?.path)
             ?? parsedMessages.find((message) => message?.type === 'screenshot' && message?.data)
             ?? parsedMessages.find((message) => message?.type === 'pong')
@@ -696,6 +701,7 @@ class GodotServer {
         }
 
         clearTimeout(timer);
+        clearTimeout(greetingTimer);
         const responseData = responseBuffer.toString('utf8').trim();
         resolved = true;
         cleanupScreenshotDir();
@@ -717,12 +723,60 @@ class GodotServer {
         }
         resolved = true;
         clearTimeout(timer);
+        clearTimeout(greetingTimer);
         cleanupScreenshotDir();
         resolve({
           content: [{ type: 'text', text: `Failed to connect to Godot runtime addon at ${RUNTIME_HOST}:${RUNTIME_PORT}: ${error.message}. Ensure the game is running with the MCP runtime autoload enabled.` }],
         });
       });
     });
+  }
+
+  private describeRuntime(identity: RuntimeIdentity): string {
+    const kind = identity.embedded ? 'an editor-embedded game' : 'a game';
+    return `${kind} (pid ${identity.pid ?? 'unknown'}${identity.projectPath ? `, project ${identity.projectPath}` : ''})`;
+  }
+
+  /**
+   * Why a runtime that greeted us is not the game run_project started, or
+   * null when it is (or when there is no run_project game to compare with:
+   * then attaching to an editor-run game is the intended use).
+   */
+  private describeStaleRuntime(identity: RuntimeIdentity): string | null {
+    const active = this.activeProcess;
+    if (!active || identity.pid === undefined || identity.pid === active.pid) {
+      return null;
+    }
+    return `runtime port ${getRuntimePort()} is held by ${this.describeRuntime(identity)}, not the game run_project started (pid ${active.pid}). `
+      + 'That is a stale run (often a game the editor runs embedded); call stop_project, then run_project.';
+  }
+
+  /** Kill the run_project child and wait for it to exit. */
+  private async stopActiveProcess(): Promise<GodotProcess | null> {
+    const active = this.activeProcess;
+    if (!active) {
+      return null;
+    }
+    this.activeProcess = null;
+    const child = active.process;
+    if (child.exitCode === null && child.signalCode === null) {
+      const exited = new Promise<void>((resolveExit) => child.once('exit', () => resolveExit()));
+      child.kill('SIGTERM');
+      const timeout = new Promise<'timeout'>((r) => setTimeout(() => r('timeout'), 3000));
+      if (await Promise.race([exited, timeout]) === 'timeout') {
+        child.kill('SIGKILL');
+        await Promise.race([exited, new Promise((r) => setTimeout(r, 2000))]);
+      }
+    }
+    return active;
+  }
+
+  private projectUsesRuntimeAddon(projectPath: string): boolean {
+    try {
+      return /^\s*MCPRuntime\s*=/m.test(readFileSync(join(projectPath, 'project.godot'), 'utf8'));
+    } catch {
+      return false;
+    }
   }
 
   private async handleLSP(toolName: string, args: unknown): Promise<{ content: Array<{ type: string; text: string }> }> {
@@ -1498,7 +1552,7 @@ class GodotServer {
         case 'get_debug_output':
           return await this.handleGetDebugOutput();
         case 'stop_project':
-          return await this.handleStopProject();
+          return await this.handleStopProject(request.params.arguments);
         case 'get_godot_version':
           return await this.handleGetGodotVersion();
         case 'list_projects':
@@ -1874,10 +1928,46 @@ class GodotServer {
         );
       }
 
-      // Kill any existing process
+      // End the previous run and wait for it: killing without waiting let the
+      // new game start while the old one still held the runtime port.
       if (this.activeProcess) {
-        this.logDebug('Killing existing Godot process before starting a new one');
-        this.activeProcess.process.kill();
+        this.logDebug('Stopping existing Godot process before starting a new one');
+        await this.stopActiveProcess();
+      }
+
+      // Whoever still holds the runtime port would receive every runtime
+      // command meant for the new game. A stale run of this same project (an
+      // editor-embedded game, a leftover -d run) is ended; anything else is
+      // left alone and reported.
+      const runtimePort = getRuntimePort();
+      const notes: string[] = [];
+      const holder = await probeRuntime(runtimePort);
+      if (holder.state === 'up' && holder.pid !== undefined && samePath(holder.projectPath, args.projectPath)) {
+        this.logDebug(`Ending stale run of this project on runtime port ${runtimePort}: pid ${holder.pid}`);
+        if (!await terminatePid(holder.pid)) {
+          return this.createErrorResponse(
+            `Runtime port ${runtimePort} is held by ${this.describeRuntime(holder)}, which did not exit`,
+            [`Kill pid ${holder.pid} by hand, then call run_project again`],
+          );
+        }
+        await waitForRuntimePortFree(runtimePort);
+        notes.push(`Ended a stale run of this project that held runtime port ${runtimePort}: ${this.describeRuntime(holder)}.`);
+      } else if (holder.state === 'up') {
+        return this.createErrorResponse(
+          `Runtime port ${runtimePort} is held by ${this.describeRuntime(holder)}; runtime commands would reach it instead of this project's game`,
+          [
+            'Stop that game, or give each project its own GOPEAK_RUNTIME_PORT',
+            'If it is a stale run of this project from an older runtime addon, kill it by hand',
+          ],
+        );
+      } else if (holder.state === 'unresponsive') {
+        return this.createErrorResponse(
+          `Runtime port ${runtimePort} is held by a process that does not answer as a Godot runtime`,
+          [
+            `Find it with: lsof -nP -iTCP:${runtimePort} -sTCP:LISTEN`,
+            'A game paused in the debugger also stops answering; end it, then call run_project again',
+          ],
+        );
       }
 
       const cmdArgs = ['-d', '--path', args.projectPath];
@@ -1921,13 +2011,42 @@ class GodotServer {
         }
       });
 
-      this.activeProcess = { process, output, errors };
+      const started: GodotProcess = { process, output, errors, pid: process.pid, projectPath: args.projectPath };
+      this.activeProcess = started;
+
+      // Wait for the game's runtime to answer as this pid, so the runtime
+      // tools called next reach this game and not a late stale one.
+      if (process.pid !== undefined && this.projectUsesRuntimeAddon(args.projectPath)) {
+        const readyOverride = Number.parseInt(globalThis.process.env.GOPEAK_RUNTIME_READY_MS || '', 10);
+        const readyMs = Number.isInteger(readyOverride) && readyOverride >= 0 ? readyOverride : 15000;
+        let lastProbe = { state: 'free' } as RuntimeProbe;
+        const ready = await waitFor(async () => {
+          if (this.activeProcess !== started) {
+            return true;
+          }
+          lastProbe = await probeRuntime(runtimePort, 1000);
+          return lastProbe.state === 'up' && lastProbe.pid === process.pid;
+        }, readyMs, 250);
+        if (this.activeProcess !== started) {
+          return this.createErrorResponse(
+            `Godot exited right after starting (code ${process.exitCode ?? process.signalCode})`,
+            ['Check the errors below', ...errors.filter((line) => line.trim()).slice(-20)],
+          );
+        }
+        if (ready) {
+          notes.push(`Runtime addon answering on port ${runtimePort} (pid ${process.pid}).`);
+        } else if (lastProbe.state === 'up') {
+          notes.push(`Warning: runtime port ${runtimePort} is answered by ${this.describeRuntime(lastProbe)}, not this game (pid ${process.pid}); runtime commands will be refused until that is resolved.`);
+        } else {
+          notes.push(`Runtime addon not answering on port ${runtimePort} yet after ${readyMs}ms; check get_debug_output.`);
+        }
+      }
 
       return {
         content: [
           {
             type: 'text',
-            text: `Godot project started in debug mode. Use get_debug_output to see output.`,
+            text: [`Godot project started in debug mode (pid ${process.pid}). Use get_debug_output to see output.`, ...notes].join('\n'),
           },
         ],
       };
@@ -2016,22 +2135,46 @@ class GodotServer {
   /**
    * Handle the stop_project tool
    */
-  private async handleStopProject() {
-    if (!this.activeProcess) {
+  private async handleStopProject(args: any) {
+    args = this.normalizeParameters(args || {});
+    const projectPath: string | null = args.projectPath || this.activeProcess?.projectPath || this.lastProjectPath;
+    const stopped: Array<Record<string, unknown>> = [];
+
+    // The game run_project started: kill it and wait until it has exited.
+    this.logDebug('Stopping active Godot process');
+    const active = await this.stopActiveProcess();
+    if (active) {
+      stopped.push({ pid: active.pid, source: 'run_project' });
+    }
+
+    // Any other run of this project still holding the runtime port — usually a
+    // game the editor runs embedded — is the run the caller means to end too:
+    // left alive it keeps answering runtime commands with stale state.
+    const runtimePort = getRuntimePort();
+    const holder = await probeRuntime(runtimePort);
+    let otherHolder: string | null = null;
+    if (holder.state === 'up' && holder.pid !== undefined && samePath(holder.projectPath, projectPath)) {
+      const ended = await terminatePid(holder.pid);
+      if (ended) {
+        await waitForRuntimePortFree(runtimePort);
+      }
+      stopped.push({ pid: holder.pid, source: holder.embedded ? 'editor-embedded run' : 'other run of this project', ended });
+    } else if (holder.state !== 'free') {
+      otherHolder = holder.state === 'up'
+        ? `Runtime port ${runtimePort} is still held by ${this.describeRuntime(holder)}; left running (not this project's run).`
+        : `Runtime port ${runtimePort} is still held by a process that does not answer as a Godot runtime; left running.`;
+    }
+
+    if (stopped.length === 0) {
       return this.createErrorResponse(
         'No active Godot process to stop.',
         [
           'Use run_project to start a Godot project first',
           'The process may have already terminated',
+          ...(otherHolder ? [otherHolder] : []),
         ]
       );
     }
-
-    this.logDebug('Stopping active Godot process');
-    this.activeProcess.process.kill();
-    const output = this.activeProcess.output;
-    const errors = this.activeProcess.errors;
-    this.activeProcess = null;
 
     return {
       content: [
@@ -2040,8 +2183,10 @@ class GodotServer {
           text: JSON.stringify(
             {
               message: 'Godot project stopped',
-              finalOutput: output,
-              finalErrors: errors,
+              stopped,
+              ...(otherHolder ? { note: otherHolder } : {}),
+              finalOutput: active?.output ?? [],
+              finalErrors: active?.errors ?? [],
             },
             null,
             2
@@ -5357,7 +5502,7 @@ class GodotServer {
               status: 'process_running_runtime_disconnected',
               processActive: true,
               runtimeAddon: 'unreachable',
-              note: 'A Godot process is active, but the runtime addon did not respond on port 7777.',
+              note: `A Godot process is active, but the runtime addon did not respond on port ${getRuntimePort()} as that process.`,
               runtimeResponse: runtimeText,
             }, null, 2),
           }],

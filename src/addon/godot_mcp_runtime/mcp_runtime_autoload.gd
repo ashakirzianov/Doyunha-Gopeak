@@ -86,7 +86,19 @@ func _send_welcome(client: StreamPeerTCP) -> void:
 		"godot_version": Engine.get_version_info(),
 		"project_name": ProjectSettings.get_setting("application/config/name", "Unknown")
 	}
+	welcome.merge(_identity())
 	_send_response(client, welcome)
+
+
+## Who is answering on the runtime port. The MCP server compares the pid with
+## the game it launched, so a stale run squatting the port (an editor-embedded
+## game, a leftover `-d` run) is refused or ended instead of silently driven.
+func _identity() -> Dictionary:
+	return {
+		"pid": OS.get_process_id(),
+		"project_path": ProjectSettings.globalize_path("res://"),
+		"embedded": "--embedded" in OS.get_cmdline_args(),
+	}
 
 
 func _handle_message(client: StreamPeerTCP, data: String) -> void:
@@ -117,7 +129,9 @@ func _handle_message(client: StreamPeerTCP, data: String) -> void:
 func _execute_command(command: String, params: Dictionary) -> Dictionary:
 	match command:
 		"ping":
-			return {"type": "pong", "timestamp": Time.get_unix_time_from_system()}
+			var pong := {"type": "pong", "timestamp": Time.get_unix_time_from_system()}
+			pong.merge(_identity())
+			return pong
 		
 		"get_tree":
 			return _cmd_get_tree(params)
