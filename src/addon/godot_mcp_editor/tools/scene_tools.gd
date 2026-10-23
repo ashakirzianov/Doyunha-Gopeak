@@ -56,7 +56,11 @@ func _load_scene(scene_path: String) -> Array:
 	var packed := load(scene_path) as PackedScene
 	if not packed:
 		return [null, {"ok": false, "error": "Failed to load: " + scene_path}]
-	var root := packed.instantiate()
+	# GEN_EDIT_STATE_MAIN is how the editor opens a scene it edits. The default
+	# (DISABLED) drops the instance/inheritance state, so a scene round-tripped
+	# through any tool here came back with inherited scenes flattened into plain
+	# nodes and instanced children rewritten with an explicit `type=`.
+	var root := packed.instantiate(PackedScene.GEN_EDIT_STATE_MAIN)
 	if not root:
 		return [null, {"ok": false, "error": "Failed to instantiate: " + scene_path}]
 	return [root, {}]
