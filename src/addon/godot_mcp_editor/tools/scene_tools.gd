@@ -815,9 +815,27 @@ func connect_signal(args: Dictionary) -> Dictionary:
 			root.queue_free()
 			return {"ok": false, "error": "Failed to connect signal: " + str(connect_result)}
 
+	var saved_source := root.get_path_to(source)
+	var saved_target := root.get_path_to(target)
+	var blocked_end := source_node_path
+	var blocker := _uneditable_instance_of(root, source)
+	if blocker == null:
+		blocked_end = target_node_path
+		blocker = _uneditable_instance_of(root, target)
+	var blocker_path := str(root.get_path_to(blocker)) if blocker else ""
+	var blocker_scene := blocker.scene_file_path if blocker else ""
+
 	var err := _save_scene(root, scene_path)
 	if not err.is_empty():
 		return err
+
+	# Godot drops a connection on save when an end sits inside an instanced
+	# scene whose children are not editable; the tool used to report success
+	# anyway. Read back what was written.
+	if not _scene_has_connection(scene_path, saved_source, signal_name, saved_target, method_name):
+		if not blocker_path.is_empty():
+			return {"ok": false, "error": "Connection not saved: %s is inside the instanced scene %s (%s), whose children are not editable, so Godot drops the connection on save. Enable Editable Children on %s in the editor, or make the connection inside %s." % [blocked_end, blocker_path, blocker_scene, blocker_path, blocker_scene]}
+		return {"ok": false, "error": "Connection not saved: %s has no [connection] for %s.%s -> %s.%s after saving" % [scene_path, source_node_path, signal_name, target_node_path, method_name]}
 
 	return {
 		"ok": true,
@@ -827,6 +845,29 @@ func connect_signal(args: Dictionary) -> Dictionary:
 		"methodName": method_name,
 		"flags": flags
 	}
+
+
+## The nearest instanced scene above `node` (owned by `root`) whose children are
+## not editable, or null. Connections touching nodes inside one are not saved.
+func _uneditable_instance_of(root: Node, node: Node) -> Node:
+	var current := node.get_parent()
+	while current != null and current != root:
+		if current.owner == root and not current.scene_file_path.is_empty() and not root.is_editable_instance(current):
+			return current
+		current = current.get_parent()
+	return null
+
+
+func _scene_has_connection(scene_path: String, source: NodePath, signal_name: String, target: NodePath, method_name: String) -> bool:
+	var packed := ResourceLoader.load(scene_path, "PackedScene", ResourceLoader.CACHE_MODE_IGNORE) as PackedScene
+	if packed == null:
+		return false
+	var state := packed.get_state()
+	for i in state.get_connection_count():
+		if state.get_connection_source(i) == source and str(state.get_connection_signal(i)) == signal_name \
+				and state.get_connection_target(i) == target and str(state.get_connection_method(i)) == method_name:
+			return true
+	return false
 
 
 func disconnect_signal(args: Dictionary) -> Dictionary:

@@ -90,6 +90,14 @@ func _init() -> void:
 	if r.get("ok", true):
 		_fail("instance_scene accepted instancing a scene into itself")
 
+	# A connection from inside an instance whose children are not editable is
+	# dropped by Godot on save; the tool must say so, not report success.
+	r = _call("connect_signal", {"scenePath": "res://Main.tscn", "sourceNodePath": "Enemy/Sprite", "signalName": "texture_changed", "targetNodePath": ".", "methodName": "_on_timeout"})
+	if r.get("ok", true) or not str(r.get("error", "")).contains("Editable Children") or not str(r.get("error", "")).contains("res://Enemy.tscn"):
+		_fail("connect_signal from a non-editable instance child: %s" % JSON.stringify(r))
+	if _text("res://Main.tscn").contains('signal="texture_changed"'):
+		_fail("unexpected texture_changed connection written")
+
 	# 3. A later edit keeps the connection and the instances as instances.
 	r = _call("add_node", {"scenePath": "res://Main.tscn", "nodeType": "Node2D", "nodeName": "Later"})
 	text = _text("res://Main.tscn")
